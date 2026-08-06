@@ -87,13 +87,16 @@ const ROUTER_TOOLS = [
     type: "function",
     function: {
       name: "record_follow_up",
-      description: "商家说对某个客户做了什么动作、要记进客户档案,如\"王姐今天签单了\"\"给张哥发了报价\"\"老李约了明天下午2点来\"。",
+      description: "商家说对某个客户做了什么动作或约了什么时间,要记进客户档案,如\"王姐今天签单了\"\"给张哥发了报价\"\"老李约了明天下午2点来\"。只要是对客户做的动作/约的时间,哪怕商家没明说『记一下』也要用本工具,不要当闲聊。",
       parameters: {
         type: "object",
         properties: {
           name: { type: "string", description: "客户称呼" },
           action: { type: "string", description: "做了什么动作,保留商家原话" },
-          date: { type: "string", description: "下次跟进日期,按系统提示里的「今天是哪天」把明天/下周一等换算成 YYYY-MM-DD;商家没提就不填" },
+          date: {
+            type: "string",
+            description: "商家明确说的「下次跟进时间」(明天/下周一/X月X日),按系统提示里的今天是哪天换算成 YYYY-MM-DD。注意:动作发生的当天(如「今天签单了」的今天)不是下次跟进日期;商家没说下次跟进时间就空着",
+          },
           stage: {
             type: "string",
             description: "商家提到阶段变化时填(如签单→已成交),必须取其一:新认识/已完成首次沟通/有明确需求/待方案体验/已成交/服务中/待复购转介绍/暂停跟进;没提就不填",
@@ -108,7 +111,7 @@ const ROUTER_TOOLS = [
     type: "function",
     function: {
       name: "general_talk",
-      description: "问候、闲聊、感谢、问你能做什么,或直接问你们产品/价格/理赔/流程等业务问题。业务问题按商家知识库资料简洁回答,2-4 句即可,不要反问、不要套话术模板。",
+      description: "问候、闲聊、感谢、问你能做什么,或直接问你们产品/价格/理赔/流程等业务问题。业务问题按商家知识库资料简洁回答,2-4 句即可,不要反问、不要套话术模板。注意:商家说给客户做了什么动作/约了什么时间要记档案时,不要用本工具,那是 record_follow_up。",
       parameters: {
         type: "object",
         properties: { text: { type: "string", description: "给商家的自然中文回复" } },
@@ -135,7 +138,11 @@ function routerSystem(botName: string, welcome: string): string {
 - 称呼取消息里出现的客户名字或昵称,不要用"我、你"这类代词。
 - 商家发问候(你好/在吗/hi)或问"你能做什么/有什么功能"时 → general_talk,直接把商家设置的欢迎语作为回复。
 - 商家直接问业务/产品问题(价格、理赔、流程、FAQ 等)→ general_talk,直接用【商家知识库】里的资料简洁回答,不要反问、不要问"是不是客户在问"。
-- 商家汇报/交代对客户做的动作("王姐今天签单了""给张哥发了报价""老李约了明天下午2点来")→ record_follow_up;action 保留原话;date 按【今天是】换算成 YYYY-MM-DD;提到签单/成交等阶段变化时 stage 填 8 个阶段之一。
+- 商家说对客户做了动作/约了时间 → record_follow_up,不要当闲聊。举例:
+  ·「王姐今天签单了」→ name=王姐,action=今天签单了,stage=已成交,date 不填
+  ·「给林小姐发了合同,下周一问反馈」→ name=林小姐,action=给林小姐发了合同,date=下周一(按今天是哪天换算成 YYYY-MM-DD),nextAction=问反馈
+  ·「刘哥约了明天下午两点来店里」→ name=刘哥,action=约了明天下午两点来店里,date=明天(换算成 YYYY-MM-DD)
+  date 只填商家明确说的下次跟进时间;「今天签单了」的今天不是下次跟进日期,date 留空。
 - 拿不准就选 general_talk,用一句自然的回复引导商家说清楚。
 
 【商家设置的欢迎语(商家问候/问功能时照此回复)】
@@ -334,6 +341,19 @@ function analysisOpts(opts: AssistantOpts, customer: Parameters<typeof customerT
   return { ...opts, productContext: knowledgeForAnalysis(opts.knowledgeDocs ?? [], customerText(customer)) };
 }
 
+// 风险去重:模型偶发把同一风险重复返回,写库前去掉重复,避免详情页"警告"出现两次。
+function dedupeRisks(risks: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of risks) {
+    const t = raw.trim().replace(/[。;；\s]+$/, "");
+    if (!t || seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+  }
+  return out;
+}
+
 async function execCreateCustomerFromChat(
   args: { name?: string; rawConversation: string },
   opts: AssistantOpts
@@ -347,6 +367,13 @@ async function execCreateCustomerFromChat(
   const customer = { name: existing?.name ?? name, rawConversation: chat, source: existing?.source ?? "微信" };
   const result = await analyzeCustomer(customer, analysisOpts(opts, customer));
 
+  // 老客户手动记过跟进(有跟进日志)→ 下步动作/跟进日期以手动记录为准,重新建档也不覆盖;
+  // 新客户或没手动记过 → 用本次分析的建议作为跟进计划。
+  const hasManualLog =
+    existing && (await prisma.followUpLog.count({ where: { customerId: existing.id } })) > 0;
+  const nextAction = hasManualLog ? existing.nextAction : result.nextAction;
+  const nextFollowDate = hasManualLog ? existing.nextFollowDate : toDateInput(result.nextFollowDate);
+
   const data = {
     name: result.record.name || name || "微信客户",
     rawConversation: chat,
@@ -356,23 +383,26 @@ async function execCreateCustomerFromChat(
     notes: result.record.notes || existing?.notes || null,
     stage: result.stage,
     tags: JSON.stringify(result.tags),
-    nextAction: result.nextAction,
-    nextFollowDate: toDateInput(result.nextFollowDate),
+    nextAction,
+    nextFollowDate,
     lastDraft: result.draftMessage,
-    riskNotes: result.risks.length ? result.risks.join("; ") : existing?.riskNotes || null,
+    riskNotes: dedupeRisks(result.risks).join("; ") || existing?.riskNotes || null,
   };
 
   const saved = existing
     ? await prisma.customer.update({ where: { id: existing.id }, data })
     : await prisma.customer.create({ data });
 
+  const kept = hasManualLog ? "(已手动记录,未改)" : "";
   return [
     existing ? `已更新客户「${saved.name}」并重新分析:` : `已建档(系统里叫「${saved.name}」,可在后台改名):`,
     `阶段:${result.stage}`,
     result.tags.length ? `标签:${result.tags.join(" · ")}` : "",
     `信息缺口:${result.infoGaps.join("、") || "无"}`,
-    `下步动作:${result.nextAction}`,
-    result.nextFollowDate ? `建议跟进:${result.nextFollowDate}` : "",
+    ...(nextAction ? [`下步动作:${nextAction}${kept}`] : []),
+    ...(nextFollowDate
+      ? [`跟进日期:${fmtDate(nextFollowDate)}${kept}`]
+      : [`跟进日期:未安排${hasManualLog ? "(以手动记录为准)" : ""}`]),
     `\n话术草稿:\n${result.draftMessage}`,
   ]
     .filter(Boolean)
@@ -381,6 +411,11 @@ async function execCreateCustomerFromChat(
 
 async function execAnalyzeCustomer(customer: Customer, opts: AssistantOpts): Promise<string> {
   const result = await analyzeCustomer(customer, analysisOpts(opts, customer));
+  // 商家手动记过跟进(有跟进日志)→ 下步动作/跟进日期以手动记录为准,重新分析不覆盖;
+  // 从未手动记过 → 用本次分析的建议补上,作为初始跟进计划。
+  const hasManualLog = (await prisma.followUpLog.count({ where: { customerId: customer.id } })) > 0;
+  const nextAction = hasManualLog ? customer.nextAction : result.nextAction;
+  const nextFollowDate = hasManualLog ? customer.nextFollowDate : toDateInput(result.nextFollowDate);
   await prisma.customer.update({
     where: { id: customer.id },
     data: {
@@ -389,19 +424,22 @@ async function execAnalyzeCustomer(customer: Customer, opts: AssistantOpts): Pro
       requirement: result.record.requirement || customer.requirement,
       interested: result.record.interested || customer.interested,
       notes: result.record.notes || customer.notes,
-      nextAction: result.nextAction,
-      nextFollowDate: toDateInput(result.nextFollowDate),
+      nextAction,
+      nextFollowDate,
       lastDraft: result.draftMessage,
-      riskNotes: result.risks.length ? result.risks.join("; ") : customer.riskNotes,
+      riskNotes: dedupeRisks(result.risks).join("; ") || customer.riskNotes,
     },
   });
+  const kept = hasManualLog ? "(已手动记录,重新分析未改)" : "";
   return [
     `重新分析完成(已更新到库):`,
     `阶段:${result.stage}`,
     result.tags.length ? `标签:${result.tags.join(" · ")}` : "",
     `信息缺口:${result.infoGaps.join("、") || "无"}`,
-    `下步动作:${result.nextAction}`,
-    result.nextFollowDate ? `建议跟进:${result.nextFollowDate}` : "",
+    ...(nextAction ? [`下步动作:${nextAction}${kept}`] : []),
+    ...(nextFollowDate
+      ? [`跟进日期:${fmtDate(nextFollowDate)}${kept}`]
+      : [`跟进日期:未安排${hasManualLog ? "(以手动记录为准)" : ""}`]),
     `\n话术草稿:\n${result.draftMessage}`,
   ]
     .filter(Boolean)
