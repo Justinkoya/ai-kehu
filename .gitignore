@@ -37,6 +37,9 @@ yarn-error.log*
 *.db
 *.db-journal
 
+# bot 心跳状态(bot 运行时写入)
+/bot/.status.json
+
 # vercel
 .vercel
 

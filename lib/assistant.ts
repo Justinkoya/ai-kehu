@@ -1,12 +1,17 @@
 import type { Customer } from "@prisma/client";
 import { prisma } from "./prisma";
 import { analyzeCustomer, callChatCompletions, type RelayMessage } from "./ai";
+import { BOT_NAME, BOT_WELCOME, STAGES } from "./constants";
+import { knowledgeForAnalysis, retrieveDocs, serializeKnowledge, type KnowledgeDocItem } from "./knowledge";
 
 export type AssistantOpts = {
   productContext?: string | null;
   aiBaseUrl?: string | null;
   aiAuthToken?: string | null;
   aiModel?: string | null;
+  botName?: string | null;
+  welcomeMessage?: string | null;
+  knowledgeDocs?: KnowledgeDocItem[];
 };
 
 type RouterAction =
@@ -15,6 +20,7 @@ type RouterAction =
   | { action: "createCustomerFromChat"; args: { name?: string; rawConversation: string } }
   | { action: "analyzeCustomer"; args: { name: string } }
   | { action: "draftFollowUp"; args: { name: string } }
+  | { action: "recordFollowUp"; args: { name: string; action: string; date?: string; stage?: string; nextAction?: string } }
   | { action: "general"; args: { text: string } };
 
 const ROUTER_TOOLS = [
@@ -80,8 +86,29 @@ const ROUTER_TOOLS = [
   {
     type: "function",
     function: {
+      name: "record_follow_up",
+      description: "商家说对某个客户做了什么动作、要记进客户档案,如\"王姐今天签单了\"\"给张哥发了报价\"\"老李约了明天下午2点来\"。",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "客户称呼" },
+          action: { type: "string", description: "做了什么动作,保留商家原话" },
+          date: { type: "string", description: "下次跟进日期,按系统提示里的「今天是哪天」把明天/下周一等换算成 YYYY-MM-DD;商家没提就不填" },
+          stage: {
+            type: "string",
+            description: "商家提到阶段变化时填(如签单→已成交),必须取其一:新认识/已完成首次沟通/有明确需求/待方案体验/已成交/服务中/待复购转介绍/暂停跟进;没提就不填",
+          },
+          nextAction: { type: "string", description: "商家提到的下步动作;没提就不填" },
+        },
+        required: ["name", "action"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "general_talk",
-      description: "问候、闲聊、感谢、问你能做什么等,不需要查库。返回一句自然的中文回复。",
+      description: "问候、闲聊、感谢、问你能做什么,或直接问你们产品/价格/理赔/流程等业务问题。业务问题按商家知识库资料简洁回答,2-4 句即可,不要反问、不要套话术模板。",
       parameters: {
         type: "object",
         properties: { text: { type: "string", description: "给商家的自然中文回复" } },
@@ -91,7 +118,8 @@ const ROUTER_TOOLS = [
   },
 ] as const;
 
-const ROUTER_SYSTEM = `你是"AI客户经营助手"微信端的功能路由。商家(真人助理)在微信里发消息给你,你要把消息路由成【唯一一个】要执行的动作,返回对应函数的参数。只能选一个动作。
+function routerSystem(botName: string, welcome: string): string {
+  return `你是「${botName}」,AI客户经营助手的微信端。商家(真人助理)在微信里发消息给你,你要把消息路由成【唯一一个】要执行的动作,返回对应函数的参数。只能选一个动作。
 
 可执行动作:
 1. get_today_follow_ups:商家问跟进清单,如"今天要跟进谁""今天有什么要跟进的""最近要跟进的"。
@@ -105,10 +133,17 @@ const ROUTER_SYSTEM = `你是"AI客户经营助手"微信端的功能路由。�
 - 消息内容明显是一整段聊天记录(多行、行内有"称呼:")→ create_customer_from_chat;客户称呼取聊天记录里对方的完整称呼,不要截断或缩写(聊天里是"测试客户小李"就填"测试客户小李"),判断不出 name 填空串。
 - "分析/重新分析"+"称呼" → analyze_customer;"话术/跟进语/怎么跟进"+"称呼" → draft_follow_up;"什么情况/怎么样/了解下/看下/档案"+"称呼" → find_customer。
 - 称呼取消息里出现的客户名字或昵称,不要用"我、你"这类代词。
+- 商家发问候(你好/在吗/hi)或问"你能做什么/有什么功能"时 → general_talk,直接把商家设置的欢迎语作为回复。
+- 商家直接问业务/产品问题(价格、理赔、流程、FAQ 等)→ general_talk,直接用【商家知识库】里的资料简洁回答,不要反问、不要问"是不是客户在问"。
+- 商家汇报/交代对客户做的动作("王姐今天签单了""给张哥发了报价""老李约了明天下午2点来")→ record_follow_up;action 保留原话;date 按【今天是】换算成 YYYY-MM-DD;提到签单/成交等阶段变化时 stage 填 8 个阶段之一。
 - 拿不准就选 general_talk,用一句自然的回复引导商家说清楚。
 
-【商家产品/服务背景,供建档后话术参考】
+【商家设置的欢迎语(商家问候/问功能时照此回复)】
+${welcome}
+
+【商家知识库(商家资料,回复/话术只能基于这些,严禁编造)】
 `;
+}
 
 function parseJson(s: string): unknown {
   try {
@@ -124,11 +159,12 @@ async function routeMessage(
   opts: AssistantOpts
 ): Promise<RouterAction> {
   const date = new Date().toISOString().slice(0, 10);
+  const knowledge = serializeKnowledge(retrieveDocs(opts.knowledgeDocs ?? [], text));
   const res = await callChatCompletions(
     [
       {
         role: "system",
-        content: `【今天是${date}】\n${ROUTER_SYSTEM}\n${opts.productContext || "(未填写)"}`,
+        content: `【今天是${date}】\n${routerSystem(opts.botName || BOT_NAME, opts.welcomeMessage || BOT_WELCOME)}\n${knowledge || "(未填写)"}`,
       },
       ...history.slice(-6),
       { role: "user", content: text },
@@ -162,15 +198,26 @@ async function routeMessage(
         return { action: "analyzeCustomer", args: { name: String(args.name ?? "") } };
       case "draft_follow_up":
         return { action: "draftFollowUp", args: { name: String(args.name ?? "") } };
+      case "record_follow_up":
+        return {
+          action: "recordFollowUp",
+          args: {
+            name: String(args.name ?? ""),
+            action: String(args.action ?? ""),
+            date: typeof args.date === "string" ? args.date : undefined,
+            stage: typeof args.stage === "string" ? args.stage : undefined,
+            nextAction: typeof args.nextAction === "string" ? args.nextAction : undefined,
+          },
+        };
       case "general_talk":
-        return { action: "general", args: { text: String(args.text ?? "") || fallbackHelp() } };
+        return { action: "general", args: { text: String(args.text ?? "") || fallbackHelp(opts.welcomeMessage || BOT_WELCOME) } };
     }
   }
-  return { action: "general", args: { text: res.content.trim() || fallbackHelp() } };
+  return { action: "general", args: { text: res.content.trim() || fallbackHelp(opts.welcomeMessage || BOT_WELCOME) } };
 }
 
-function fallbackHelp(): string {
-  return "我在的。你可以这样问我:\n- 「今天要跟进谁」\n- 把和客户的聊天记录粘贴给我建档\n- 「分析一下王姐」\n- 「王姐的跟进话术」";
+function fallbackHelp(welcome: string): string {
+  return welcome.trim() || BOT_WELCOME;
 }
 
 function fmtDate(d: Date): string {
@@ -274,6 +321,19 @@ function profileReply(c: Customer): string {
   return customerProfile(c) + "\n\n要话术回「XX 的跟进话术」;要重新分析回「分析 XX」。";
 }
 
+function customerText(c: {
+  name?: string | null;
+  requirement?: string | null;
+  interested?: string | null;
+  rawConversation?: string | null;
+}): string {
+  return [c.name, c.requirement, c.interested, c.rawConversation].filter(Boolean).join("\n");
+}
+
+function analysisOpts(opts: AssistantOpts, customer: Parameters<typeof customerText>[0]): AssistantOpts {
+  return { ...opts, productContext: knowledgeForAnalysis(opts.knowledgeDocs ?? [], customerText(customer)) };
+}
+
 async function execCreateCustomerFromChat(
   args: { name?: string; rawConversation: string },
   opts: AssistantOpts
@@ -284,14 +344,8 @@ async function execCreateCustomerFromChat(
   const name = args.name?.trim() || "";
   // 建档只在名字完全一致时才视为同一客户(更新),避免模糊匹配误覆盖别的客户
   const existing = name ? await prisma.customer.findFirst({ where: { name } }) : undefined;
-  const result = await analyzeCustomer(
-    {
-      name: existing?.name ?? name,
-      rawConversation: chat,
-      source: existing?.source ?? "微信",
-    },
-    opts
-  );
+  const customer = { name: existing?.name ?? name, rawConversation: chat, source: existing?.source ?? "微信" };
+  const result = await analyzeCustomer(customer, analysisOpts(opts, customer));
 
   const data = {
     name: result.record.name || name || "微信客户",
@@ -326,7 +380,7 @@ async function execCreateCustomerFromChat(
 }
 
 async function execAnalyzeCustomer(customer: Customer, opts: AssistantOpts): Promise<string> {
-  const result = await analyzeCustomer(customer, opts);
+  const result = await analyzeCustomer(customer, analysisOpts(opts, customer));
   await prisma.customer.update({
     where: { id: customer.id },
     data: {
@@ -358,12 +412,60 @@ async function execDraftFollowUp(customer: Customer, opts: AssistantOpts): Promi
   if (customer.lastDraft) {
     return `${customer.name} 的跟进话术:\n\n${customer.lastDraft}\n\n(历史草稿,需要重新生成就回「重新分析 ${customer.name}」)`;
   }
-  const result = await analyzeCustomer(customer, opts);
+  const result = await analyzeCustomer(customer, analysisOpts(opts, customer));
   await prisma.customer.update({
     where: { id: customer.id },
     data: { lastDraft: result.draftMessage },
   });
   return `${customer.name} 的跟进话术:\n\n${result.draftMessage}`;
+}
+
+async function execRecordFollowUp(
+  customer: Customer,
+  args: { action: string; date?: string; stage?: string; nextAction?: string }
+): Promise<string> {
+  const action = (args.action || "").trim();
+  if (!action) return "没听清做了什么动作,再说一次,比如「王姐今天签单了」。";
+
+  const rawDate = typeof args.date === "string" ? args.date.trim() : "";
+  const dateProvided = rawDate !== "";
+  const parsedDate = dateProvided ? toDateInput(rawDate) : null;
+  const dateUnparsed = dateProvided && !parsedDate;
+
+  const stage = (args.stage || "").trim();
+  const stageMatch = stage ? STAGES.find((s) => s.includes(stage) || stage.includes(s)) : undefined;
+
+  let nextFollowDate: Date | null = customer.nextFollowDate;
+  if (!dateProvided) nextFollowDate = null; // 没提下次跟进→这次已了结,不再提醒
+  else if (parsedDate) nextFollowDate = parsedDate; // 给了且能解析→设新日期
+  // 给了但解析失败→保持原值,回复里说明
+
+  await prisma.$transaction([
+    prisma.followUpLog.create({ data: { customerId: customer.id, action } }),
+    prisma.customer.update({
+      where: { id: customer.id },
+      data: {
+        lastAction: action,
+        nextAction: typeof args.nextAction === "string" && args.nextAction.trim() ? args.nextAction.trim() : null,
+        nextFollowDate,
+        ...(stageMatch ? { stage: stageMatch } : {}),
+      },
+    }),
+  ]);
+
+  const lines = [`已记录「${customer.name}:${action}」`];
+  if (stageMatch) lines.push(`阶段:${stageMatch} ✓`);
+  if (dateUnparsed) {
+    lines.push(`下次跟进日期:没认出来(${rawDate}),说清楚哪一天我再记`);
+  } else if (nextFollowDate) {
+    lines.push(`下次跟进日期:${fmtDate(nextFollowDate)}(到点我会提醒)`);
+  } else {
+    lines.push(`下次跟进日期:未安排,说「约${customer.name}X月X日」我就记上`);
+  }
+  if (typeof args.nextAction === "string" && args.nextAction.trim()) {
+    lines.push(`下步动作:${args.nextAction.trim()}`);
+  }
+  return lines.join("\n");
 }
 
 type Outcome =
@@ -389,6 +491,11 @@ async function dispatch(action: RouterAction, opts: AssistantOpts): Promise<Outc
       if (!r.customer) return { kind: "ask", action, matches: r.matches, text: r.question };
       return { kind: "reply", text: await execDraftFollowUp(r.customer, opts) };
     }
+    case "recordFollowUp": {
+      const r = await resolveCustomer(action.args.name);
+      if (!r.customer) return { kind: "ask", action, matches: r.matches, text: r.question };
+      return { kind: "reply", text: await execRecordFollowUp(r.customer, action.args) };
+    }
     case "createCustomerFromChat":
       return { kind: "reply", text: await execCreateCustomerFromChat(action.args, opts) };
     case "general":
@@ -402,12 +509,15 @@ async function executeOnCustomer(action: RouterAction, customer: Customer, opts:
       return execAnalyzeCustomer(customer, opts);
     case "draftFollowUp":
       return execDraftFollowUp(customer, opts);
+    case "recordFollowUp":
+      return execRecordFollowUp(customer, action.args);
     default:
       return profileReply(customer);
   }
 }
 
-export function createAssistant(opts: AssistantOpts) {
+export function createAssistant(initialOpts: AssistantOpts) {
+  let opts = initialOpts;
   let pending: { action: RouterAction; matches: Customer[] } | null = null;
   const history: RelayMessage[] = [];
 
@@ -440,5 +550,10 @@ export function createAssistant(opts: AssistantOpts) {
     }
   }
 
-  return { handle };
+  return {
+    handle,
+    setOpts(next: AssistantOpts) {
+      opts = next;
+    },
+  };
 }

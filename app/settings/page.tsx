@@ -1,33 +1,39 @@
 "use client";
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { NavBar } from "@/components/navbar";
-import { AI_MODEL, AI_MODELS } from "@/lib/constants";
-
-const EXAMPLE = `- 我们做家庭/企业保障方案,合作多家保险公司,可对比报价
-- 主打产品:XX 医疗险,保额 XX 起,含门诊报销
-- 价格区间:XXXX 元/年 起
-- 常见问题:异地投保、健康告知、理赔时效
-- 禁止承诺:收益、保证理赔、返佣`;
+import { AI_MODEL, AI_MODELS, BOT_NAME, BOT_WELCOME } from "@/lib/constants";
 
 export default function SettingsPage() {
-  const [productContext, setProductContext] = useState("");
   const [aiBaseUrl, setAiBaseUrl] = useState("");
   const [aiToken, setAiToken] = useState("");
   const [aiModel, setAiModel] = useState(AI_MODEL);
   const [aiConfigured, setAiConfigured] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [botName, setBotName] = useState(BOT_NAME);
+  const [welcomeMessage, setWelcomeMessage] = useState(BOT_WELCOME);
+  const [savingBot, setSavingBot] = useState(false);
+  const [savedBot, setSavedBot] = useState(false);
+  const [autoStart, setAutoStart] = useState(false);
+  const [autoStartSaving, setAutoStartSaving] = useState(false);
+  const [autoStartError, setAutoStartError] = useState("");
 
   useEffect(() => {
     fetch("/api/settings")
       .then((r) => r.json())
       .then((d) => {
         const s = d.setting ?? {};
-        setProductContext(s.productContext ?? "");
         setAiBaseUrl(s.aiBaseUrl ?? "");
         setAiModel(s.aiModel ?? AI_MODEL);
+        setBotName(s.botName ?? BOT_NAME);
+        setWelcomeMessage(s.welcomeMessage ?? BOT_WELCOME);
         setAiConfigured(!!s.aiAuthTokenConfigured && !!s.aiBaseUrl);
       });
+    fetch("/api/bot/autostart")
+      .then((r) => r.json())
+      .then((d) => setAutoStart(!!d.enabled))
+      .catch(() => {});
   }, []);
 
   async function handleSave() {
@@ -37,7 +43,6 @@ export default function SettingsPage() {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        productContext,
         aiBaseUrl,
         aiModel,
         aiAuthToken: aiToken.trim() || undefined,
@@ -63,6 +68,40 @@ export default function SettingsPage() {
     setSaved(true);
   }
 
+  async function handleSaveBot() {
+    setSavingBot(true);
+    setSavedBot(false);
+    await fetch("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ botName, welcomeMessage }),
+    });
+    setSavingBot(false);
+    setSavedBot(true);
+  }
+
+  async function handleToggleAutoStart() {
+    const next = !autoStart;
+    setAutoStartSaving(true);
+    setAutoStartError("");
+    try {
+      const res = await fetch("/api/bot/autostart", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: next }),
+      });
+      const d = await res.json();
+      if (!res.ok) {
+        setAutoStartError(d.error ?? "设置失败");
+      } else {
+        setAutoStart(!!d.enabled);
+      }
+    } catch {
+      setAutoStartError("设置失败,请稍后再试");
+    }
+    setAutoStartSaving(false);
+  }
+
   return (
     <div className="min-h-screen bg-slate-100">
       <NavBar />
@@ -75,48 +114,97 @@ export default function SettingsPage() {
         <div className="mt-5 rounded-xl border border-blue-200 bg-blue-50 p-4">
           <div className="text-sm font-medium text-blue-900">这个页面是干嘛的?</div>
           <ul className="mt-2 space-y-1 text-sm text-blue-800/80">
-            <li>· 上半部分:写清"我们卖什么、多少钱、能承诺什么",AI 生成话术时照着说</li>
+            <li>· 上半部分:设置微信机器人(名字、欢迎语、开机自启);商家资料在「知识库」页管</li>
             <li>· 下半部分:填 AI 服务的中转地址和密钥,还能选一个分析模型(GPT 系列)</li>
             <li>· 改完点「保存设置」立即生效,后续每次 AI 分析都会带上</li>
           </ul>
         </div>
 
         <div className="mt-5 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <label className="block">
-            <span className="mb-1 block text-sm font-medium text-slate-700">产品 / 服务背景</span>
-            <textarea
-              value={productContext}
-              onChange={(e) => setProductContext(e.target.value)}
-              rows={8}
-              placeholder={"把你卖的东西、价格、常见问题写清楚,例如:\n\n- 我们做家庭/企业保障方案\n- 主打产品:XX 医疗险\n- 价格区间:XXXX 元/年 起\n- 禁止承诺:收益、保证理赔"}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-            />
-          </label>
-          <div className="mt-3 flex gap-2 text-xs">
-            <button
-              type="button"
-              onClick={() => setProductContext(EXAMPLE)}
-              className="rounded border border-slate-300 px-2.5 py-1 text-slate-600 hover:bg-slate-50"
-            >
-              填入示例(照这个格式改成你的)
-            </button>
-            <button
-              type="button"
-              onClick={() => setProductContext("")}
-              className="rounded border border-slate-300 px-2.5 py-1 text-slate-600 hover:bg-slate-50"
-            >
-              清空
-            </button>
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-sm font-medium text-slate-800">商家知识库</h2>
+            <Link href="/knowledge" className="text-sm text-blue-600 hover:underline">
+              去维护 →
+            </Link>
+          </div>
+          <p className="mt-1 text-sm text-slate-600">
+            产品背景、价格、FAQ 等商家资料统一在「知识库」管理。机器人按客户对话内容检索相关资料,不填资料也能用,但话术会更"通用"。
+          </p>
+        </div>
+
+        <div className="mt-5 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-sm font-medium text-slate-800">微信机器人</h2>
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
+              在手机微信里陪你跟进客户的那个
+            </span>
+          </div>
+          <p className="mt-1 text-sm text-slate-600">
+            改名字和欢迎语,保存后 bot 收到下一条消息就会用新的。左上角 header 会显示这个名字和在线状态。
+          </p>
+          <div className="mt-3 space-y-3">
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium text-slate-700">机器人名字</span>
+              <input
+                value={botName}
+                onChange={(e) => setBotName(e.target.value)}
+                placeholder={BOT_NAME}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-sm font-medium text-slate-700">欢迎语 / 功能说明</span>
+              <textarea
+                value={welcomeMessage}
+                onChange={(e) => setWelcomeMessage(e.target.value)}
+                rows={5}
+                placeholder={BOT_WELCOME}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+              />
+              <span className="mt-1 block text-xs text-slate-500">
+                商家在微信里发「你好 / 在吗 / 你能做什么」时,机器人会回复这段。
+              </span>
+            </label>
           </div>
           <div className="mt-4 flex items-center gap-3">
             <button
-              onClick={handleSave}
-              disabled={saving}
+              onClick={handleSaveBot}
+              disabled={savingBot}
               className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
             >
-              {saving ? "保存中…" : "保存设置"}
+              {savingBot ? "保存中…" : "保存机器人设置"}
             </button>
-            {saved && <span className="text-sm text-emerald-600">已保存 ✓</span>}
+            {savedBot && <span className="text-sm text-emerald-600">已保存 ✓</span>}
+          </div>
+
+          <div className="mt-4 flex items-center justify-between gap-3 border-t border-slate-100 pt-4">
+            <div>
+              <div className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                开机自动启动
+                {autoStartSaving && <span className="text-xs font-normal text-slate-400">保存中…</span>}
+              </div>
+              <p className="mt-0.5 text-xs text-slate-500">
+                Windows 开机后自动启动微信机器人(最小化窗口),不用每次手动开 start-bot.bat
+              </p>
+              {autoStartError && <p className="mt-1 text-xs text-red-600">{autoStartError}</p>}
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={autoStart}
+              aria-label="开机自动启动"
+              onClick={handleToggleAutoStart}
+              disabled={autoStartSaving}
+              className={`relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-50 ${
+                autoStart ? "bg-blue-600" : "bg-slate-300"
+              }`}
+            >
+              <span
+                className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${
+                  autoStart ? "left-[22px]" : "left-0.5"
+                }`}
+              />
+            </button>
           </div>
         </div>
 
@@ -182,16 +270,11 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        <div className="mt-5 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="mb-2 text-sm font-medium text-slate-800">推荐格式(照着填)</h2>
-          <pre className="whitespace-pre-wrap rounded-lg bg-slate-50 p-3 text-xs leading-relaxed text-slate-600">{EXAMPLE}</pre>
-        </div>
-
         <div className="mt-5 rounded-xl border border-slate-200 bg-white p-5 text-sm text-slate-600 shadow-sm">
           <h2 className="mb-2 font-medium text-slate-800">说明</h2>
           <ul className="list-inside list-disc space-y-1">
             <li>AI 生成话术只会在你给的范围内发挥,不会编造你们没有的能力。</li>
-            <li>不写产品背景也没关系,AI 仍会根据客户聊天原文生成话术,但会更"通用"一些。</li>
+            <li>知识库里不填资料也没关系,AI 仍会根据客户聊天原文生成话术,但会更"通用"一些。</li>
             <li>所有 AI 输出都是待你审核的初稿,确认后再发给客户。</li>
             <li>密钥只保存在本机数据库里,不会明文显示、不会上传到其他地方。</li>
           </ul>

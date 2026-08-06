@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { analyzeCustomer } from "@/lib/ai";
+import { knowledgeForAnalysis, loadDocs } from "@/lib/knowledge";
 
 export async function POST(req: Request) {
   const { customerId, customer } = await req.json();
@@ -15,9 +16,13 @@ export async function POST(req: Request) {
   }
 
   const setting = await prisma.setting.findUnique({ where: { id: 1 } });
+  const docs = await loadDocs();
+  const customerText = [record.name, record.requirement, record.interested, record.rawConversation]
+    .filter(Boolean)
+    .join("\n");
   try {
     const result = await analyzeCustomer(record, {
-      productContext: setting?.productContext ?? null,
+      productContext: knowledgeForAnalysis(docs, customerText),
       aiBaseUrl: setting?.aiBaseUrl ?? null,
       aiAuthToken: setting?.aiAuthToken ?? null,
       aiModel: setting?.aiModel ?? null,

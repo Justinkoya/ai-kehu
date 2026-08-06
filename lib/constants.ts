@@ -33,3 +33,12 @@ export const AI_MODELS = [
   { id: "gpt-5.3", label: "gpt-5.3" },
   { id: "gpt-5.2", label: "gpt-5.2" },
 ];
+
+// 微信机器人属性默认值:设置页可改,写入 Setting 表后 bot 每条消息前读取
+export const BOT_NAME = "小助理";
+
+export const BOT_WELCOME = `我在的。我是你的经营助理,可以这样用:
+- 「今天要跟进谁」——看今天的跟进清单
+- 把和客户的聊天记录粘贴给我——自动建档 + 分析
+- 「分析一下王姐」——重新分析某位客户
+- 「王姐的跟进话术」——生成跟进话术草稿`;

@@ -10,9 +10,10 @@ export async function GET() {
   return NextResponse.json({
     setting: {
       id: setting.id,
-      productContext: setting.productContext,
       aiBaseUrl: setting.aiBaseUrl,
       aiModel: setting.aiModel,
+      botName: setting.botName,
+      welcomeMessage: setting.welcomeMessage,
       aiAuthTokenConfigured: !!setting.aiAuthToken,
       updatedAt: setting.updatedAt,
     },
@@ -23,14 +24,17 @@ export async function PUT(req: Request) {
   const data = await req.json();
 
   const update: Record<string, unknown> = {};
-  if (typeof data.productContext === "string") {
-    update.productContext = data.productContext;
-  }
   if (typeof data.aiBaseUrl === "string") {
     update.aiBaseUrl = data.aiBaseUrl.trim() || null;
   }
   if (typeof data.aiModel === "string") {
     update.aiModel = data.aiModel.trim() || null;
+  }
+  if (typeof data.botName === "string") {
+    update.botName = data.botName.trim() || null;
+  }
+  if (typeof data.welcomeMessage === "string") {
+    update.welcomeMessage = data.welcomeMessage.trim() || null;
   }
   // token 输入框留空 = 保留原值;填了 = 覆盖;clearAi = 清空
   if (typeof data.aiAuthToken === "string" && data.aiAuthToken.trim()) {
@@ -49,9 +53,10 @@ export async function PUT(req: Request) {
   return NextResponse.json({
     setting: {
       id: setting.id,
-      productContext: setting.productContext,
       aiBaseUrl: setting.aiBaseUrl,
       aiModel: setting.aiModel,
+      botName: setting.botName,
+      welcomeMessage: setting.welcomeMessage,
       aiAuthTokenConfigured: !!setting.aiAuthToken,
       updatedAt: setting.updatedAt,
     },
