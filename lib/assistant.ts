@@ -144,6 +144,7 @@ function routerSystem(botName: string, welcome: string): string {
   ·「刘哥约了明天下午两点来店里」→ name=刘哥,action=约了明天下午两点来店里,date=明天(换算成 YYYY-MM-DD)
   date 只填商家明确说的下次跟进时间;「今天签单了」的今天不是下次跟进日期,date 留空。
 - 拿不准就选 general_talk,用一句自然的回复引导商家说清楚。
+- 返回动作只能通过调用工具完成,不要把 get_today_follow_ups(...)、find_customer(...) 这类函数调用当作文本回复;你的回复要么是工具调用,要么是给商家的自然语言,二选一。
 
 【商家设置的欢迎语(商家问候/问功能时照此回复)】
 ${welcome}
@@ -220,7 +221,55 @@ async function routeMessage(
         return { action: "general", args: { text: String(args.text ?? "") || fallbackHelp(opts.welcomeMessage || BOT_WELCOME) } };
     }
   }
+  const parsed = actionFromToolCallText(res.content);
+  if (parsed) return parsed;
   return { action: "general", args: { text: res.content.trim() || fallbackHelp(opts.welcomeMessage || BOT_WELCOME) } };
+}
+
+// 模型偶发不真调工具,而是把函数调用写进回复文本(如 `find_customer(keyword="林小姐")`
+// 或 `get_today_follow_ups 已为你整理…`)。识别这种文本按工具参数路由,
+// 否则商家会收到一行工具名当回复。
+function actionFromToolCallText(content: string): RouterAction | null {
+  const m = content
+    .trim()
+    .match(
+      /^(get_today_follow_ups|find_customer|create_customer_from_chat|analyze_customer|draft_follow_up|record_follow_up|general_talk)\b([\s\S]*)$/
+    );
+  if (!m) return null;
+  const name = m[1];
+  const args: Record<string, string> = {};
+  const argRe = /([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"((?:[^"\\]|\\.)*)"/g;
+  let am: RegExpExecArray | null;
+  while ((am = argRe.exec(m[2]))) args[am[1]] = am[2];
+  switch (name) {
+    case "get_today_follow_ups":
+      return { action: "getTodayFollowUps", args: {} };
+    case "find_customer":
+      return { action: "findCustomer", args: { keyword: args.keyword ?? "" } };
+    case "create_customer_from_chat":
+      // 文本形式通常带不出整段聊天原文,无原文就不硬建档,交给普通回复兜底
+      return args.rawConversation
+        ? { action: "createCustomerFromChat", args: { name: args.name || "", rawConversation: args.rawConversation } }
+        : null;
+    case "analyze_customer":
+      return { action: "analyzeCustomer", args: { name: args.name ?? "" } };
+    case "draft_follow_up":
+      return { action: "draftFollowUp", args: { name: args.name ?? "" } };
+    case "record_follow_up":
+      return {
+        action: "recordFollowUp",
+        args: {
+          name: args.name ?? "",
+          action: args.action ?? "",
+          date: args.date || undefined,
+          stage: args.stage || undefined,
+          nextAction: args.nextAction || undefined,
+        },
+      };
+    case "general_talk":
+      return { action: "general", args: { text: args.text || content.trim() } };
+  }
+  return null;
 }
 
 function fallbackHelp(welcome: string): string {

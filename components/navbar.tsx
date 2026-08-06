@@ -8,6 +8,7 @@ const LINKS = [
   { href: "/", label: "今日跟进" },
   { href: "/dashboard", label: "看板" },
   { href: "/customers", label: "客户列表" },
+  { href: "/chat-history", label: "聊天记录" },
   { href: "/knowledge", label: "知识库" },
   { href: "/settings", label: "设置" },
 ];

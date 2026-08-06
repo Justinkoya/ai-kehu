@@ -49,14 +49,17 @@ model ChatMessage {
 }
 
 model Setting {
-  id             Int      @id @default(1)
-  productContext String?
-  aiBaseUrl      String?
-  aiAuthToken    String?
-  aiModel        String?
-  botName        String?
-  welcomeMessage String?
-  updatedAt      DateTime @updatedAt
+  id              Int      @id @default(1)
+  productContext  String?
+  aiBaseUrl       String?
+  aiAuthToken     String?
+  aiModel         String?
+  botName         String?
+  welcomeMessage  String?
+  reminderEnabled Boolean  @default(true)
+  reminderStart   String   @default("09:00")
+  reminderEnd     String   @default("21:00")
+  updatedAt       DateTime @updatedAt
 }
 
 model KnowledgeDoc {

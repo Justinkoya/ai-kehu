@@ -14,6 +14,9 @@ export async function GET() {
       aiModel: setting.aiModel,
       botName: setting.botName,
       welcomeMessage: setting.welcomeMessage,
+      reminderEnabled: setting.reminderEnabled,
+      reminderStart: setting.reminderStart,
+      reminderEnd: setting.reminderEnd,
       aiAuthTokenConfigured: !!setting.aiAuthToken,
       updatedAt: setting.updatedAt,
     },
@@ -44,6 +47,15 @@ export async function PUT(req: Request) {
     update.aiBaseUrl = null;
     update.aiAuthToken = null;
   }
+  if (typeof data.reminderEnabled === "boolean") {
+    update.reminderEnabled = data.reminderEnabled;
+  }
+  // 时段只接受 HH:mm(小时可一位);用字典序比较判断是否在窗口内,补齐前导零保证一致
+  for (const k of ["reminderStart", "reminderEnd"] as const) {
+    if (typeof data[k] === "string" && /^\d{1,2}:\d{2}$/.test(data[k])) {
+      update[k] = data[k].replace(/^(\d):/, "0$1");
+    }
+  }
 
   const setting = await prisma.setting.upsert({
     where: { id: 1 },
@@ -57,6 +69,9 @@ export async function PUT(req: Request) {
       aiModel: setting.aiModel,
       botName: setting.botName,
       welcomeMessage: setting.welcomeMessage,
+      reminderEnabled: setting.reminderEnabled,
+      reminderStart: setting.reminderStart,
+      reminderEnd: setting.reminderEnd,
       aiAuthTokenConfigured: !!setting.aiAuthToken,
       updatedAt: setting.updatedAt,
     },

@@ -26,6 +26,7 @@ async function loadOpts(): Promise<AssistantOpts> {
 const STATUS_FILE = path.join(__dirname, ".status.json");
 let statusName = "";
 let messageCount = 0;
+let lastConversationId = "";
 
 function writeStatus() {
   try {
@@ -36,6 +37,7 @@ function writeStatus() {
         name: statusName,
         pid: process.pid,
         messageCount,
+        lastConversationId,
         updatedAt: new Date().toISOString(),
       })
     );
@@ -50,6 +52,7 @@ const agent = {
   async chat(req: { conversationId?: string; text?: string; media?: { type?: string } }) {
     const text = req?.text?.trim() ?? "";
     const convId = req?.conversationId ?? "default";
+    if (convId) lastConversationId = convId;
     messageCount++;
     console.log(`[req] conv=${convId} textLen=${text.length} media=${req?.media?.type ?? "none"} text=${JSON.stringify(text.slice(0, 80))}`);
     try {
@@ -86,15 +89,38 @@ const agent = {
   },
 };
 
+// 是否允许此刻推送:提醒开关开着,且当前本地时间在设定时段内。
+// HH:mm 字符串字典序即时间序,直接用字符串比较。
+async function reminderAllowed(): Promise<boolean> {
+  const s = await prisma.setting.findUnique({ where: { id: 1 } });
+  if (s?.reminderEnabled === false) return false;
+  const now = new Date();
+  const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+  const start = s?.reminderStart || "09:00";
+  const end = s?.reminderEnd || "21:00";
+  return hhmm >= start && hhmm < end;
+}
+
 // 跟进提醒轮询:每 5 分钟扫一次今天到期/逾期的客户,主动推送提醒。
 // sendMessage 需要商家近期发过消息才有会话凭证;失败不标记,下轮重试。
+// 推送成功后把提醒文本作为助手消息落库,聊天记录页才能看到 bot 主动发的提醒。
 function startReminderLoop(bot: { sendMessage: (message: string) => Promise<void> }) {
   const check = async () => {
     try {
+      if (!(await reminderAllowed())) return;
       const due = await collectDue();
       if (!due) return;
       await bot.sendMessage(due.text);
       await markReminded(due.ids);
+      if (lastConversationId) {
+        try {
+          await prisma.chatMessage.create({
+            data: { conversationId: lastConversationId, role: "assistant", content: due.text },
+          });
+        } catch (e) {
+          console.error("[reminder] 提醒落库失败:", e instanceof Error ? e.message : String(e));
+        }
+      }
       console.log(`[reminder] 已推送 ${due.ids.length} 个跟进提醒`);
     } catch (e) {
       console.error("[reminder] 推送失败(下轮重试):", e instanceof Error ? e.message : String(e));
