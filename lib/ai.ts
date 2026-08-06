@@ -165,16 +165,27 @@ function demoAnalyze(customer: Parameters<typeof customerRecordText>[0]): Analys
   };
 }
 
-// 中转 OpenAI 兼容端点:关 thinking + 强制 function calling,模型按 schema 返回结构化 JSON。
-async function callOpenAi(
-  customer: Parameters<typeof customerRecordText>[0],
-  opts?: { productContext?: string | null; aiBaseUrl?: string | null; aiAuthToken?: string | null; aiModel?: string | null }
-): Promise<AnalysisResult> {
-  // 设置页配置优先,.env 兜底
+export type RelayMessage = { role: "system" | "user" | "assistant"; content: string };
+export type ToolCall = { name: string; arguments: string };
+export type RelayResult = { content: string; toolCalls: ToolCall[] };
+
+// 中转 OpenAI 兼容端点的通用调用:设置页配置优先,.env 兜底;关 thinking;
+// 带 tools 时由调用方决定 tool_choice(auto 让模型选,或指定函数名强制)。
+export async function callChatCompletions(
+  messages: RelayMessage[],
+  opts?: {
+    tools?: readonly unknown[];
+    toolChoice?: unknown;
+    maxTokens?: number;
+    aiBaseUrl?: string | null;
+    aiAuthToken?: string | null;
+    aiModel?: string | null;
+  }
+): Promise<RelayResult> {
   const authToken = (opts?.aiAuthToken?.trim() || process.env.ANTHROPIC_AUTH_TOKEN || "").trim();
   const baseURL = opts?.aiBaseUrl?.trim() || process.env.ANTHROPIC_BASE_URL || "";
   const model = opts?.aiModel?.trim() || AI_MODEL;
-  if (!authToken || !baseURL.trim()) return demoAnalyze(customer);
+  if (!authToken || !baseURL.trim()) throw new Error("未配置中转地址或密钥");
 
   const url = `${baseURL.replace(/\/+$/, "")}/v1/chat/completions`;
   const res = await fetch(url, {
@@ -182,14 +193,11 @@ async function callOpenAi(
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
     body: JSON.stringify({
       model,
-      max_tokens: 4096,
+      max_tokens: opts?.maxTokens ?? 4096,
       thinking: { type: "disabled" },
-      messages: [
-        { role: "system", content: `【今天是${new Date().toISOString().slice(0, 10)}】\n` + AI_SYSTEM_PROMPT },
-        { role: "user", content: customerRecordText(customer, opts?.productContext) },
-      ],
-      tools: [SUBMIT_ANALYSIS_TOOL],
-      tool_choice: { type: "function", function: { name: "submit_analysis" } },
+      messages,
+      ...(opts?.tools?.length ? { tools: opts.tools } : {}),
+      ...(opts?.toolChoice ? { tool_choice: opts.toolChoice } : {}),
     }),
   });
   if (!res.ok) {
@@ -197,14 +205,49 @@ async function callOpenAi(
     throw new Error(`AI 调用失败:HTTP ${res.status} ${body.slice(0, 200)}`);
   }
   const data = await res.json();
-  const args = data?.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments;
+  const msg = data?.choices?.[0]?.message as
+    | { content?: unknown; tool_calls?: Array<{ function?: { name?: string; arguments?: string } }> }
+    | undefined;
+  const toolCalls: ToolCall[] = Array.isArray(msg?.tool_calls)
+    ? msg.tool_calls
+        .filter((tc) => tc?.function?.name)
+        .map((tc) => ({
+          name: tc.function!.name!,
+          arguments: typeof tc.function?.arguments === "string" ? tc.function.arguments : "",
+        }))
+    : [];
+  return { content: typeof msg?.content === "string" ? msg.content : "", toolCalls };
+}
+
+async function callOpenAi(
+  customer: Parameters<typeof customerRecordText>[0],
+  opts?: { productContext?: string | null; aiBaseUrl?: string | null; aiAuthToken?: string | null; aiModel?: string | null }
+): Promise<AnalysisResult> {
+  const authToken = (opts?.aiAuthToken?.trim() || process.env.ANTHROPIC_AUTH_TOKEN || "").trim();
+  const baseURL = opts?.aiBaseUrl?.trim() || process.env.ANTHROPIC_BASE_URL || "";
+  if (!authToken || !baseURL.trim()) return demoAnalyze(customer);
+
+  const { toolCalls, content } = await callChatCompletions(
+    [
+      { role: "system", content: `【今天是${new Date().toISOString().slice(0, 10)}】\n` + AI_SYSTEM_PROMPT },
+      { role: "user", content: customerRecordText(customer, opts?.productContext) },
+    ],
+    {
+      tools: [SUBMIT_ANALYSIS_TOOL],
+      toolChoice: { type: "function", function: { name: "submit_analysis" } },
+      maxTokens: 4096,
+      aiBaseUrl: opts?.aiBaseUrl,
+      aiAuthToken: opts?.aiAuthToken,
+      aiModel: opts?.aiModel,
+    }
+  );
+  const args = toolCalls[0]?.arguments;
   if (typeof args === "string" && args.trim()) {
     const obj = tryParseJson(args);
     if (obj !== undefined) return normalizeAnalysis(obj);
   }
   // 兜底:极端情况下没走工具调用,尝试从 content 解析
-  const text = typeof data?.choices?.[0]?.message?.content === "string" ? data.choices[0].message.content : "";
-  if (text.trim()) return parseAnalysisJson(text);
+  if (content.trim()) return parseAnalysisJson(content);
   throw new Error("AI 输出不是合法 JSON");
 }
 
