@@ -1,0 +1,51 @@
+name: Windows 发布
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 生成 Prisma Client
+        run: npx prisma generate
+
+      - name: 构建生产版本(standalone)
+        run: npm run build
+
+      - name: 组装安装目录(含便携 Node)
+        run: npm run pack
+
+      - name: 读取版本号
+        id: ver
+        shell: bash
+        run: echo "v=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: 安装 Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: 编译安装程序
+        run: "& 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' /DMyAppVersion=${{ steps.ver.outputs.v }} setup.iss"
+
+      - name: 打便携包
+        run: Compress-Archive -Path 'build\package\*' -DestinationPath "release\ai-kehu-portable-${{ steps.ver.outputs.v }}.zip" -Force
+
+      - name: 发布到 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/ai-kehu-setup-*.exe
+            release/ai-kehu-portable-*.zip

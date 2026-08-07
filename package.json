@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "bot": "tsx bot/index.ts"
+    "bot": "tsx bot/index.ts",
+    "pack": "node scripts/prepare-package.mjs",
+    "manager": "node manager.js"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
