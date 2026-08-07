@@ -41,10 +41,16 @@ jobs:
         run: choco install innosetup -y --no-progress
 
       - name: 编译安装程序
-        run: "& 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' /DMyAppVersion=${{ steps.ver.outputs.v }} setup.iss"
+        env:
+          VERSION: ${{ steps.ver.outputs.v }}
+        run: |
+          & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' /DMyAppVersion=$env:VERSION setup.iss
 
       - name: 打便携包
-        run: Compress-Archive -Path 'build\package\*' -DestinationPath "release\ai-kehu-portable-${{ steps.ver.outputs.v }}.zip" -Force
+        env:
+          VERSION: ${{ steps.ver.outputs.v }}
+        run: |
+          Compress-Archive -Path 'build\package\*' -DestinationPath "release\ai-kehu-portable-$env:VERSION.zip" -Force
 
       - name: 发布到 GitHub Release
         uses: softprops/action-gh-release@v2
