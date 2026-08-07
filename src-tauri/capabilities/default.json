@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "默认能力(壳只加载外部页面,前端不调 IPC)",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

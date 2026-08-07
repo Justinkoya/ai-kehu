@@ -31,7 +31,13 @@ jobs:
       - name: 构建生产版本(standalone)
         run: npm run build
 
-      - name: 组装安装目录(含便携 Node)
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 构建桌面壳(WebView2 原生窗口)
+        run: npx tauri build --no-bundle
+
+      - name: 组装安装目录(含便携 Node 与桌面壳)
         run: npm run pack
 
       - name: 读取版本号

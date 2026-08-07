@@ -33,6 +33,9 @@ const cfg = (() => {
   }
 })();
 
+// 由 Tauri 壳拉起时(--shell),不再弹浏览器,窗口由壳负责
+const SHELL = process.argv.includes("--shell");
+
 const children = new Map();
 let stopping = false;
 let botBackoff = 1000;
@@ -189,7 +192,7 @@ async function main() {
   // 已在运行:只打开浏览器,然后退出(防重复实例,兼顾开机自启 + 手动双击)
   for (let i = 0; i < 10; i++) {
     if (await healthOk(cfg.port + i)) {
-      openBrowser(cfg.port + i);
+      if (!SHELL) openBrowser(cfg.port + i);
       return;
     }
   }
@@ -208,7 +211,7 @@ async function main() {
 
   superviseServer();
   if (await waitHealthy(port)) {
-    if (cfg.openBrowser) openBrowser(port);
+    if (cfg.openBrowser && !SHELL) openBrowser(port);
   } else {
     log("manager", `后台启动超时,请查看 data/logs/server-*.log(如端口被长期占用,可改 config.json 的 port)`);
   }

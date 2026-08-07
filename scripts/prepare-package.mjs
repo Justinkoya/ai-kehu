@@ -43,6 +43,16 @@ for (const f of ["package.json", "prisma.config.ts", "tsconfig.json", "manager.j
   copyFile(join(ROOT, f), join(OUT, f));
 }
 
+// Tauri 桌面壳(exe 由 npx tauri build --no-bundle 产出;本地没编 Rust 时跳过,不影响纯浏览器版)
+const shellExe = join(ROOT, "src-tauri", "target", "release", "ai-kehu-shell.exe");
+if (existsSync(shellExe)) {
+  copyFile(shellExe, join(OUT, "ai-kehu-shell.exe"));
+  const loader = join(ROOT, "src-tauri", "target", "release", "WebView2Loader.dll");
+  if (existsSync(loader)) copyFile(loader, join(OUT, "WebView2Loader.dll"));
+} else {
+  console.warn("未找到 src-tauri/target/release/ai-kehu-shell.exe,安装包将不含桌面壳(仅浏览器版)");
+}
+
 // 3) 便携 Node(win-x64,~30MB);--skip-node 时跳过
 if (!SKIP_NODE) {
   const version = await latestNodeVersion(NODE_MAJOR);
@@ -58,6 +68,17 @@ if (!SKIP_NODE) {
 
 // 测试产生的 data/(dev.db、日志)绝不进安装包,首启由 manager 重新 migrate
 rmSync(join(OUT, "data"), { recursive: true, force: true });
+
+// WebView2 Evergreen Bootstrapper(旧系统缺 WebView2 时安装包引导用;下载失败不阻断)
+try {
+  const wv2 = join(OUT, "MicrosoftEdgeWebview2Setup.exe");
+  if (!existsSync(wv2)) {
+    console.log("下载 WebView2 引导程序…");
+    await download("https://go.microsoft.com/fwlink/p/?LinkId=2124703", wv2);
+  }
+} catch (e) {
+  console.warn("WebView2 引导程序下载失败(无 WebView2 的机器将无法启动壳):", e.message);
+}
 
 console.log("组装完成:", OUT);
 

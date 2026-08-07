@@ -22,7 +22,7 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 CloseApplications=no
-UninstallDisplayIcon={app}\runtime\node\node.exe
+UninstallDisplayIcon={app}\ai-kehu-shell.exe
 
 [Languages]
 Name: "chinesesimplified"; MessagesFile: "ChineseSimplified.isl"
@@ -35,11 +35,23 @@ Name: "desktopicon"; Description: "在桌面创建快捷方式"; GroupDescriptio
 Source: "build\package\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs
 
 [Registry]
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "AI客户经营助手"; ValueData: "wscript.exe ""{app}\launch-hidden.vbs"""; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "AI客户经营助手"; ValueData: """""{app}\ai-kehu-shell.exe"""" --start-minimized"; Flags: uninsdeletevalue
 
 [Icons]
-Name: "{autodesktop}\AI客户经营助手"; Filename: "{app}\launch-hidden.vbs"; Tasks: desktopicon
-Name: "{autoprograms}\AI客户经营助手"; Filename: "{app}\launch-hidden.vbs"
+Name: "{autodesktop}\AI客户经营助手"; Filename: "{app}\ai-kehu-shell.exe"; Tasks: desktopicon
+Name: "{autoprograms}\AI客户经营助手"; Filename: "{app}\ai-kehu-shell.exe"
 
 [Run]
-Filename: "wscript.exe"; Parameters: """{app}\launch-hidden.vbs"""; Flags: nowait postinstall skipifsilent
+; 旧系统缺 WebView2 运行时:先引导安装(下载失败或已安装则跳过),再启动壳
+Filename: "{app}\MicrosoftEdgeWebview2Setup.exe"; Parameters: "/silent /install"; StatusMsg: "正在安装 WebView2 运行时…"; Check: not IsWebView2Installed and FileExists(ExpandConstant('{app}\MicrosoftEdgeWebview2Setup.exe')); Flags: skipifdoesntexist
+Filename: "{app}\ai-kehu-shell.exe"; Flags: nowait postinstall skipifsilent
+
+[Code]
+function IsWebView2Installed(): Boolean;
+var
+  V: String;
+begin
+  Result := RegQueryStringValue(HKLM64, 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', V);
+  if not Result then
+    Result := RegQueryStringValue(HKLM32, 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', V);
+end;

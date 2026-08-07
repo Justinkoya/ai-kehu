@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI客户经营助手</title>
+    <style>
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+        background: #f5f7fa;
+      }
+      #wrap {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 20px;
+      }
+      .logo {
+        width: 72px;
+        height: 72px;
+        border-radius: 18px;
+        background: linear-gradient(135deg, #4f6bff, #7a4fff);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #fff;
+        font-size: 34px;
+        font-weight: 700;
+        box-shadow: 0 10px 24px rgba(79, 107, 255, 0.35);
+      }
+      .title {
+        font-size: 20px;
+        font-weight: 600;
+        color: #1f2329;
+      }
+      .status {
+        font-size: 13px;
+        color: #7a828c;
+      }
+      .spinner {
+        width: 22px;
+        height: 22px;
+        border: 3px solid rgba(79, 107, 255, 0.2);
+        border-top-color: #4f6bff;
+        border-radius: 50%;
+        animation: spin 0.9s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="wrap">
+      <div class="logo">AI</div>
+      <div class="title">AI客户经营助手</div>
+      <div class="spinner"></div>
+      <div class="status" id="status">正在启动服务,请稍候…</div>
+    </div>
+  </body>
+</html>

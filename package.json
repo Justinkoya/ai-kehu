@@ -1,6 +1,6 @@
 {
   "name": "ai-kehu",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -9,7 +9,9 @@
     "lint": "eslint",
     "bot": "tsx bot/index.ts",
     "pack": "node scripts/prepare-package.mjs",
-    "manager": "node manager.js"
+    "manager": "node manager.js",
+    "shell:dev": "tauri dev",
+    "shell:build": "tauri build --no-bundle"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
@@ -20,6 +22,7 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@tauri-apps/cli": "^2.11.4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
